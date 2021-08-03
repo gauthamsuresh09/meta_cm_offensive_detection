@@ -108,6 +108,10 @@ def get_args():
         action="store_false",
     )
     parser.add_argument(
+        "--sets_are_pre_split",
+        action="store_true",
+    )
+    parser.add_argument(
         "--sample_task_to_size_ratio",
         action="store_true",
         help="Whether to sample episodes from tasks per ratio of the total task size",

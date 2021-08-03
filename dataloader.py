@@ -139,6 +139,7 @@ class DistilDataLoader(DataLoader):
         }
 
         print("data", self.data_length)
+        print("Dataset sizes", self.dataset_sizes)
         self.observed_seed_set = None
 
         # Split available samples
@@ -169,6 +170,7 @@ class DistilDataLoader(DataLoader):
                     }
 
     def save_to_json(self, filename, dict_to_store):
+        print(filename)
         with open(os.path.abspath(filename), "w") as f:
             json.dump(dict_to_store, fp=f)
 
@@ -265,7 +267,8 @@ class DistilDataLoader(DataLoader):
                 seqs[0],
                 text_pair=extra_seq,
                 add_special_tokens=True,
-                max_length=512,
+                padding='max_length',
+                max_length=128,
                 truncation=True,
             )
         )
@@ -385,6 +388,7 @@ class DistilDataLoader(DataLoader):
         for teacher_dir in teacher_dirs:
             lang_dirs = next(os.walk(os.path.join(root, teacher_dir)))[1]
             for lang_dir in lang_dirs:
+                prev_len = len(raw_data_sample_paths)
                 class_dirs = next(os.walk(os.path.join(root, teacher_dir, lang_dir)))[1]
                 if (
                     len(class_dirs) < min_nr_classes
@@ -412,6 +416,8 @@ class DistilDataLoader(DataLoader):
                             )
                         ]
                     )
+                new_len = len(raw_data_sample_paths)
+                print(teacher_dir, lang_dir, new_len - prev_len)
         return labels, raw_data_sample_paths
 
     def get_data_paths(self):
@@ -455,9 +461,11 @@ class DistilDataLoader(DataLoader):
                         label = "_".join(sample_file.split(os.sep)[-4:-2])
                         class_ix = sample_file.split(os.sep)[-2]
                         # Label is defined as teacher/lang combination, but data is also split over classes to generate meta tasks from
-                        samples_path_dict[tmp_label_map[label]][class_ix].append(
-                            sample_file
-                        )
+                        #samples_path_dict[tmp_label_map[label]][class_ix].append(
+                        #    sample_file
+                        #)
+                        split_name = sample_file.split(os.sep)[-5]
+                        samples_path_dict[label_name_to_idx[f"{split_name}/{label}"]][class_ix].append(sample_file)
 
         return samples_path_dict, idx_to_label_name, label_name_to_idx
 
@@ -514,6 +522,8 @@ class DistilDataLoader(DataLoader):
         rng = np.random.RandomState(seed)
         # get task_idx
 
+        print(f"Get full task set for {task_name}")
+
         if self.args.sets_are_pre_split:
             task_idx = (
                 task_name.replace("train/", "", 1)
@@ -541,14 +551,18 @@ class DistilDataLoader(DataLoader):
         y_dev = []
         label_indices = list(range(len(task_files)))
         for label_ix, class_task_files in enumerate(task_files):
+            #print(class_task_files.keys(), list(class_task_files.values())[0])
 
-            rng.shuffle(class_task_files)
+            if type(class_task_files) == dict:
+                class_task_files_mod = class_task_files['support'] + class_task_files['query']
+
+            rng.shuffle(class_task_files_mod)
 
             num_train_samples = self.args.num_samples_per_class
 
             # load
             task_samples, sample_lens, task_logits = self.get_class_samples(
-                class_task_files,
+                class_task_files_mod,
                 label_ix,
                 label_indices,
                 is_gold_label=self.args.val_using_cross_entropy
@@ -969,6 +983,8 @@ class MetaLearningSystemDataLoader(object):
             self.dataset.data_length["val"] = total_batches * self.dataset.batch_size
         self.dataset.switch_set(set_name="val")
 
+        print(f"Val data length : {self.dataset.data_length['val']}")
+
         for sample_id, sample_batched in enumerate(self.get_dataloader()):
             yield sample_batched
 
@@ -1033,3 +1049,155 @@ class MetaLearningSystemDataLoader(object):
         )
 
         return train_dataloader, dev_dataloader
+
+
+
+    def load_binary_finetune_split(self, task_name):
+        print(task_name)
+        split_name, teacher_lang = task_name.split('/')
+        teacher_name, lang_name = teacher_lang.split('_')
+
+        class_dirs = next(os.walk(os.path.join(self.args.finetune_data_path, split_name, teacher_name, lang_name)))[1]
+
+        raw_data_sample_paths = []
+        for class_dir in class_dirs:
+            raw_data_sample_paths.extend(
+                [
+                    os.path.abspath(f)
+                    for f in glob.glob(
+                        os.path.join(
+                            self.args.finetune_data_path, split_name, teacher_name, lang_name, class_dir, "*.json"
+                        )
+                    )
+                ]
+            )
+
+        class_samples, teacher_encodings = self.dataset.load_batch(raw_data_sample_paths)
+
+        class_samples, sample_lens = stack_and_pad_tensors(
+            class_samples, padding_index=self.dataset.tokenizer.pad_token_id
+        )
+
+        return class_samples, sample_lens, teacher_encodings
+
+    def get_task_set_splits(self, task_suffix):
+        """
+        Retrieves the full dataset corresponding to task_name
+        :param task_name:
+        :return:
+        """
+
+        if not self.args.sets_are_pre_split:
+            raise Exception("Only pre-split datasets supported for now.")
+
+        x_train = []
+        len_train = []
+        y_train = []
+        x_dev = []
+        len_dev = []
+        y_dev = []
+        x_test = []
+        len_test = []
+        y_test = []
+
+
+        print("Loading training data...")
+        task_name = 'train/' + task_suffix
+        task_samples, sample_lens, task_logits = self.load_binary_finetune_split(task_name)
+        x_train.append(task_samples)
+        len_train.append(sample_lens)
+        #y_train.append(task_logits)
+        y_train = torch.stack(task_logits)
+
+
+        print("Loading validation data...")
+        task_name = 'val/' + task_suffix
+        task_samples, sample_lens, task_logits = self.load_binary_finetune_split(task_name)
+        x_dev.append(task_samples)
+        len_dev.append(sample_lens)
+        #y_dev.append(task_logits)
+        y_dev = torch.stack(task_logits)
+
+
+        print("Loading test data...")
+        task_name = 'test/' + task_suffix
+        task_samples, sample_lens, task_logits = self.load_binary_finetune_split(task_name)
+        x_test.append(task_samples)
+        len_test.append(sample_lens)
+        #y_test.append(task_logits)
+        y_test = torch.stack(task_logits)
+
+        x_train = [y.squeeze() for x in x_train for y in x.split(1)]
+        x_train, _ = stack_and_pad_tensors(
+            x_train, padding_index=self.dataset.tokenizer.pad_token_id
+        )
+        len_train = torch.cat(len_train)
+        #y_train = torch.cat(y_train)
+        print(x_train.shape)
+        print(len_train.shape)
+        print(y_train.shape)
+
+        x_dev = [y.squeeze() for x in x_dev for y in x.split(1)]
+        x_dev, _ = stack_and_pad_tensors(
+            x_dev, padding_index=self.dataset.tokenizer.pad_token_id
+        )
+
+        len_dev = torch.cat(len_dev)
+        #y_dev = torch.cat(y_dev)
+
+        x_test = [y.squeeze() for x in x_test for y in x.split(1)]
+        x_test, _ = stack_and_pad_tensors(
+            x_test, padding_index=self.dataset.tokenizer.pad_token_id
+        )
+
+        len_test = torch.cat(len_test)
+        #y_test = torch.cat(y_test)
+
+
+        train_mask = torch.ones_like(x_train)
+        train_mask = (
+            torch.arange(train_mask.size(1))
+            < len_train.contiguous().view(-1).unsqueeze(1)
+        ) * train_mask
+
+        train_dataset = TensorDataset(
+            x_train, train_mask, y_train
+        )
+        train_sampler = SequentialSampler(train_dataset)
+
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=self.args.finetune_batch_size,
+            shuffle=True
+        )
+
+        dev_mask = torch.ones_like(x_dev)
+        dev_mask = (
+            torch.arange(dev_mask.size(1))
+            < len_dev.contiguous().view(-1).unsqueeze(1)
+        ) * dev_mask
+
+        dev_dataset = TensorDataset(x_dev, dev_mask, y_dev)
+        dev_sampler = SequentialSampler(dev_dataset)
+        dev_dataloader = DataLoader(
+            dev_dataset,
+            sampler=dev_sampler,
+            batch_size=self.args.finetune_batch_size,
+        )
+
+        test_mask = torch.ones_like(x_test)
+        test_mask = (
+            torch.arange(test_mask.size(1))
+            < len_test.contiguous().view(-1).unsqueeze(1)
+        ) * test_mask
+
+        test_dataset = TensorDataset(x_test, test_mask, y_test)
+        test_sampler = SequentialSampler(test_dataset)
+        test_dataloader = DataLoader(
+            test_dataset,
+            sampler=test_sampler,
+            batch_size=self.args.finetune_batch_size,
+        )
+
+
+        return train_dataloader, dev_dataloader, test_dataloader

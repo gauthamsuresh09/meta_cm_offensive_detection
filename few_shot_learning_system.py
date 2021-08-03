@@ -59,6 +59,7 @@ class FewShotClassifier(nn.Module):
         self.current_epoch = 0
         self.is_distil = "distil" in args.pretrained_weights
         self.is_xlm = "xlm" in args.pretrained_weights
+        print(self.is_distil, self.is_xlm)
         self.meta_update_method = args.meta_update_method.lower()
 
         self.meta_loss = args.meta_loss

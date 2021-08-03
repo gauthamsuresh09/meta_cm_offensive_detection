@@ -39,6 +39,7 @@ class MetaBERT(nn.Module):
 
         self.fast_weights = None
         self.device = torch.device(device)
+        self.config.problem_type = None
 
     def freeze(self, freeze_classifier=False):
         # Freeze the model up to the classification head
@@ -274,6 +275,108 @@ class MetaBERT(nn.Module):
         return extended_attention_mask
 
 
+from transformers.modeling_outputs import SequenceClassifierOutput
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+
+class MetaBERTForHF(MetaBERT):
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        r"""
+        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+            Labels for computing the sequence classification/regression loss. Indices should be in :obj:`[0, ...,
+            config.num_labels - 1]`. If :obj:`config.num_labels == 1` a regression loss is computed (Mean-Square loss),
+            If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = super().forward(num_step=None,
+                                input_ids=input_ids,
+                                attention_mask=attention_mask,
+                                token_type_ids=token_type_ids,
+                                position_ids=position_ids,
+                                head_mask=head_mask,
+                                inputs_embeds=inputs_embeds,
+                                encoder_hidden_states=None,
+                                encoder_attention_mask=None,
+                                params=None,
+                                training=None,
+                                return_hidden_states=False,
+                                return_pooled=False
+                                )
+        logits = outputs[0]
+
+        loss = None
+        if labels is not None:
+            if self.config.problem_type is None:
+                if self.config.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.config.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
+                if self.config.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=None,
+            attentions=None,
+        )
+
+
+    def load_model(self, model_save_dir, model_name, model_idx):
+        """
+        Load checkpoint and return the state dictionary containing the network state params and experiment state.
+        :param model_save_dir: The directory from which to load the files.
+        :param model_name: The model_name to be loaded from the direcotry.
+        :param model_idx: The index of the model (i.e. epoch number or 'latest' for the latest saved model of the current
+        experiment)
+        :return: A dictionary containing the experiment state and the saved model parameters.
+        """
+        filepath = os.path.join(model_save_dir, "{}_{}".format(model_name, model_idx))
+        state = torch.load(filepath, map_location=torch.device("cpu"))
+        state_dict_loaded = state["network"]
+
+        param_dict = dict()
+        for name, param in state_dict_loaded.items():
+            if name.startswith('inner_loop_optimizer.') or 'LayerNorm' in name:
+                continue
+            if name.startswith('classifier.'):
+                name = name[11:]
+            param_dict[name] = param
+
+        self.load_state_dict(state_dict=param_dict, strict=False)
+        return param_dict
+
+
+
 ####################################################
 # HELPER FUNCTIONS
 ####################################################
@@ -322,7 +425,7 @@ if __name__ == "__main__":
         is_xlm=is_xlm,
         per_step_layer_norm_weights=True,
         num_inner_loop_steps=5,
-        init_class_head=True,
+        #init_class_head=True,
     )
     classifier.eval()
     s = classifier.state_dict()
@@ -338,8 +441,10 @@ if __name__ == "__main__":
         ]
     ).to(torch.long)
 
-    m_out = classifier(0, input_ids=input_ids)
+    m_out = classifier(0, input_ids=input_ids, return_hidden_states=True)
     b_out = bert(input_ids)
+    print(m_out)
+    print(b_out)
 
     for (n1, p1), (n2, p2) in zip(
         classifier.named_parameters(), bert.named_parameters()
@@ -348,5 +453,5 @@ if __name__ == "__main__":
             print(n1, n2, "False")
 
     assert (
-        m_out.ne(b_out[0])
+        m_out[1].ne(b_out[0])
     ).sum() == 0, "Output not consistent between MetaBert and Bert"

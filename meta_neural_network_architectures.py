@@ -369,7 +369,7 @@ class MetaBertSelfOutput(nn.Module):
         self.dense = MetaLinearLayer(config.hidden_size, config.hidden_size)
         self.layer_norm_eps = 1e-12 if is_distil else config.layer_norm_eps
         self.LayerNorm = MetaLayerNormLayer(config.hidden_size, eps=self.layer_norm_eps)
-        self.dropout_prob = config.hidden_dropout_prob
+        self.dropout_prob = config.dropout if is_distil else config.hidden_dropout_prob
 
     def forward(self, hidden_states, input_tensor, num_step, params=None):
 
@@ -396,7 +396,7 @@ class MetaAdapterBertSelfOutput(nn.Module):
         self.dense = MetaLinearLayer(config.hidden_size, config.hidden_size)
         self.layer_norm_eps = 1e-12 if is_distil else config.layer_norm_eps
         self.LayerNorm = MetaLayerNormLayer(config.hidden_size, eps=self.layer_norm_eps)
-        self.dropout_prob = config.hidden_dropout_prob
+        self.dropout_prob = config.dropout if is_distil else config.hidden_dropout_prob
 
         self.attention_text_task_adapters = nn.ModuleDict(
             {
@@ -540,7 +540,7 @@ class MetaBertOutput(nn.Module):
         self.LayerNorm = MetaLayerNormLayer(
             config.hidden_size, eps=config.layer_norm_eps
         )
-        self.dropout_prob = config.hidden_dropout_prob
+        self.dropout_prob = config.dropout if is_distil else config.hidden_dropout_prob
 
     def forward(self, hidden_states, input_tensor, num_step, params=None):
 
@@ -683,7 +683,7 @@ class MetaAdapterBertOutput(nn.Module):  # BertSelfOutputAdaptersMixin,
         self.dense = MetaLinearLayer(config.intermediate_size, config.hidden_size)
         self.layer_norm_eps = 1e-12 if is_distil else config.layer_norm_eps
         self.LayerNorm = MetaLayerNormLayer(config.hidden_size, eps=self.layer_norm_eps)
-        self.dropout_prob = config.hidden_dropout_prob
+        self.dropout_prob = config.dropout if is_distil else config.hidden_dropout_prob
         self.dropout = nn.Dropout()
 
         self.adapter_fusion_layer = nn.ModuleDict(
