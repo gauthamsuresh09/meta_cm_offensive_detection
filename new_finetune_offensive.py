@@ -109,7 +109,7 @@ else:
 
 # Few shot training
 train_size = 0.1
-train_texts, _, train_labels, _ = train_test_split(train_texts, train_labels, random_state=42, train_size=train_size, stratify=train_labels)
+train_texts, _, train_labels, _ = train_test_split(train_texts, train_labels, random_state=43, train_size=train_size, stratify=train_labels)
 
 print(f"Number of train samples : {len(train_labels)}")
 
@@ -136,6 +136,10 @@ def tokenize_function(examples):
 train_encodings = train_dataset.map(tokenize_function, batched=True)
 val_encodings = val_dataset.map(tokenize_function, batched=True)
 
+model_columns = ['input_ids', 'attention_mask', 'label']
+train_encodings.set_format('torch', columns=model_columns)
+val_encodings.set_format('torch', columns=model_columns)
+
 import numpy as np
 from datasets import load_metric
 
@@ -147,7 +151,7 @@ def compute_metrics(eval_pred):
     return metric.compute(predictions=predictions, references=labels)
 
 from transformers import AutoModelForSequenceClassification, Trainer, TrainingArguments, AutoConfig
-from transformers import set_seed
+from transformers import set_seed, EarlyStoppingCallback
 
 from sklearn.utils import class_weight
 import torch.nn as nn
@@ -173,24 +177,26 @@ class WeightedTrainer(Trainer):
 
 num_epochs = 15
 warmup_steps = 250
+
+early_stopping = EarlyStoppingCallback(early_stopping_patience=3)
+
 training_args = TrainingArguments(
     do_train=True,
     do_eval=True,
     learning_rate=2e-5,
-    #evaluation_strategy='epoch',
     output_dir='./models',          # output directory
     num_train_epochs=num_epochs,              # total number of training epochs
     per_device_train_batch_size=32,  # batch size per device during training
     per_device_eval_batch_size=32,   # batch size for evaluation
-    save_steps=10000,
-    save_total_limit=2,
+    save_strategy="epoch",
+    evaluation_strategy="epoch",
+    save_total_limit=3,
     warmup_steps=warmup_steps,                # number of warmup steps for learning rate scheduler
     weight_decay=0.01,                # strength of weight decay
-    #eval_steps=107,
-    eval_steps=45,
-    evaluate_during_training=True,
-    logging_steps=9,
+    metric_for_best_model="eval_loss",
+    load_best_model_at_end=True,
 )
+
 
 model_name = "xlm-roberta-base"
 #model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -198,7 +204,7 @@ model_name = "xlm-roberta-base"
 
 # Load meta bert model
 
-from meta_bert import MetaBERT, MetaBERTForHF
+from new_meta_bert import MetaBERT, MetaBERTForHF
 is_distil = False
 is_xlm = True
 bert = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -215,18 +221,30 @@ model = MetaBERTForHF.init_from_pretrained(
     num_inner_loop_steps=5,
 )
 
-saved_models_filepath = "/home/azureuser/meta/ml_code/offensive_lang_detect_binary_proto/saved_models/"
-checkpoint = Path(saved_models_filepath) / "train_model_best"
+#model_name="train_model"
+#model_idx="best"
+#saved_models_filepath = "/home/azureuser/meta/ml_code/offensive_lang_detect_binary_proto/saved_models/"
+#checkpoint = Path(saved_models_filepath) / "train_model_best"
+
+
+model_name="maml"
+model_idx="7_state"
+saved_models_filepath = "/home/azureuser/meta/ml_code/models/"
+checkpoint = Path(saved_models_filepath) / f"{model_name}_{model_idx}"
 
 if checkpoint.exists():
     #Load the model
     print("Loading model")
     state = model.load_model(
         model_save_dir=saved_models_filepath,
-        model_name="train_model",
-        model_idx="best",
+        model_name=model_name,
+        model_idx=model_idx,
     )
     del state
+else:
+    import sys
+    print("State not found")
+    sys.exit(1)
 
 
 trainer = WeightedTrainer(
@@ -234,7 +252,8 @@ trainer = WeightedTrainer(
     args=training_args,                  # training arguments, defined above
     train_dataset=train_encodings,         # training dataset
     eval_dataset=val_encodings,             # evaluation dataset
-    compute_metrics=compute_metrics
+    compute_metrics=compute_metrics,
+#    callbacks=[early_stopping]
 )
 
 trainer.train()
@@ -259,6 +278,7 @@ test_text_processed = [preprocess_text(text) for text in test_texts]
 test_dataset = Dataset.from_dict({'text': test_text_processed, 'label': test_labels})
 
 test_encodings = test_dataset.map(tokenize_function, batched=True)
+test_encodings.set_format('torch', columns=model_columns)
 
 test_raw_pred,_,_ = trainer.predict(test_encodings)
 test_preds = np.argmax(test_raw_pred, axis=1)

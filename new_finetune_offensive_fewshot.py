@@ -1,5 +1,11 @@
 import re
 import string
+import sys
+
+"""
+dataset_name seed_val model_name model_idx
+
+"""
 
 PUNCUATION_LIST = list(string.punctuation)
 
@@ -62,10 +68,28 @@ def detect_elongated_words(row):
 
 from pathlib import Path
 
-dataset_name = 'hasoc-2020/task2-ta'
-val_set = False
+#dataset_name = 'hasoc-2020/task1-ml'
+dataset_name = sys.argv[1]
 
 dataset_path = Path('../datasets/offensive_2020_csv/') / dataset_name
+
+data_files = {
+    'hasoc-2020/task1-ml': {
+        'train': 'train.tsv',
+        'val': 'val.tsv',
+        'test': 'test.csv'
+    },
+    'hasoc-2020/task2-ta': {
+        'train': 'train.csv',
+        'test': 'test.tsv'
+    },
+    'hasoc-2020/task2-ml': {
+        'train': 'train.csv',
+        'test': 'test.tsv'
+    }
+}
+
+datasets_to_undersample = {'hasoc-2020/task1-ml'}
 
 import csv
 from sklearn.model_selection import train_test_split
@@ -100,18 +124,39 @@ def read_offensive_split(filename, headers=False):
 
     return texts, labels
 
-train_texts, train_labels = read_offensive_split( dataset_path / 'train.csv', headers=True)
+dataset_file_map = data_files[dataset_name]
 
-if val_set:
-  val_texts, val_labels = read_offensive_split( dataset_path / 'val.tsv')
+train_texts, train_labels = read_offensive_split( dataset_path / dataset_file_map['train'], headers=True)
+
+if 'val' in dataset_file_map:
+  val_texts, val_labels = read_offensive_split( dataset_path / dataset_file_map['val'])
 else:
   train_texts, val_texts, train_labels, val_labels = train_test_split(train_texts, train_labels, random_state=42, test_size=0.15, stratify=train_labels)
 
+
 # Few shot training
-train_size = 0.1
-train_texts, _, train_labels, _ = train_test_split(train_texts, train_labels, random_state=42, train_size=train_size, stratify=train_labels)
+from imblearn.under_sampling import RandomUnderSampler
+
+seed_val = int(sys.argv[2])
+if dataset_name in datasets_to_undersample:
+    train_per_class_count = {
+        0: 150,
+        1: 150
+    }
+    train_texts = [[text] for text in train_texts]
+    rus = RandomUnderSampler(sampling_strategy=train_per_class_count, random_state=seed_val, replacement=True)
+    train_texts, train_labels = rus.fit_resample(train_texts, train_labels)
+    train_texts = [text[0] for text in train_texts]
+else:
+    train_size = 0.1
+    train_texts, _, train_labels, _ = train_test_split(train_texts, train_labels, random_state=seed_val, train_size=train_size, stratify=train_labels)
+
+print(train_labels)
 
 print(f"Number of train samples : {len(train_labels)}")
+from collections import Counter
+train_counter = Counter(train_labels)
+print(train_counter)
 
 train_text_processed = [preprocess_text(text) for text in train_texts]
 
@@ -136,6 +181,10 @@ def tokenize_function(examples):
 train_encodings = train_dataset.map(tokenize_function, batched=True)
 val_encodings = val_dataset.map(tokenize_function, batched=True)
 
+model_columns = ['input_ids', 'attention_mask', 'label']
+train_encodings.set_format('torch', columns=model_columns)
+val_encodings.set_format('torch', columns=model_columns)
+
 import numpy as np
 from datasets import load_metric
 
@@ -147,7 +196,7 @@ def compute_metrics(eval_pred):
     return metric.compute(predictions=predictions, references=labels)
 
 from transformers import AutoModelForSequenceClassification, Trainer, TrainingArguments, AutoConfig
-from transformers import set_seed
+from transformers import set_seed, EarlyStoppingCallback
 
 from sklearn.utils import class_weight
 import torch.nn as nn
@@ -173,60 +222,83 @@ class WeightedTrainer(Trainer):
 
 num_epochs = 15
 warmup_steps = 250
+
+early_stopping = EarlyStoppingCallback(early_stopping_patience=3)
+
 training_args = TrainingArguments(
     do_train=True,
     do_eval=True,
     learning_rate=2e-5,
-    #evaluation_strategy='epoch',
     output_dir='./models',          # output directory
     num_train_epochs=num_epochs,              # total number of training epochs
     per_device_train_batch_size=32,  # batch size per device during training
     per_device_eval_batch_size=32,   # batch size for evaluation
-    save_steps=10000,
-    save_total_limit=2,
+    save_strategy="epoch",
+    evaluation_strategy="epoch",
+    save_total_limit=3,
     warmup_steps=warmup_steps,                # number of warmup steps for learning rate scheduler
     weight_decay=0.01,                # strength of weight decay
-    #eval_steps=107,
-    eval_steps=45,
-    evaluate_during_training=True,
-    logging_steps=9,
+    metric_for_best_model="eval_loss",
+    load_best_model_at_end=True,
 )
 
-model_name = "xlm-roberta-base"
-#model = AutoModelForSequenceClassification.from_pretrained(model_name)
-#model.train()
 
-# Load meta bert model
 
-from meta_bert import MetaBERT, MetaBERTForHF
-is_distil = False
-is_xlm = True
-bert = AutoModelForSequenceClassification.from_pretrained(model_name)
-bert.eval()
-t = bert.state_dict()
-config = bert.config
-model = MetaBERTForHF.init_from_pretrained(
-    t,
-    config,
-    num_labels=2,
-    is_distil=is_distil,
-    is_xlm=is_xlm,
-    per_step_layer_norm_weights=False,
-    num_inner_loop_steps=5,
-)
+base_model_name = "xlm-roberta-base"
 
-saved_models_filepath = "/home/azureuser/meta/ml_code/offensive_lang_detect_binary_proto/saved_models/"
-checkpoint = Path(saved_models_filepath) / "train_model_best"
+model_name = sys.argv[3]
+model_idx = sys.argv[4]
 
-if checkpoint.exists():
-    #Load the model
-    print("Loading model")
-    state = model.load_model(
-        model_save_dir=saved_models_filepath,
-        model_name="train_model",
-        model_idx="best",
+if model_name == "base":
+    print("Loading normal HF model")
+    model = AutoModelForSequenceClassification.from_pretrained(base_model_name)
+    model.train()
+
+else:
+    # Load meta bert model
+    print("Loading MetaBERT model from checkpoint")
+    from new_meta_bert import MetaBERT, MetaBERTForHF
+    is_distil = False
+    is_xlm = True
+    bert = AutoModelForSequenceClassification.from_pretrained(base_model_name)
+    bert.eval()
+    t = bert.state_dict()
+    config = bert.config
+    model = MetaBERTForHF.init_from_pretrained(
+        t,
+        config,
+        num_labels=2,
+        is_distil=is_distil,
+        is_xlm=is_xlm,
+        per_step_layer_norm_weights=False,
+        num_inner_loop_steps=5,
     )
-    del state
+
+    #model_name="train_model"
+    #model_idx="best"
+    #saved_models_filepath = "/home/azureuser/meta/ml_code/offensive_lang_detect_binary_proto/saved_models/"
+    #checkpoint = Path(saved_models_filepath) / "train_model_best"
+
+
+    #model_name="maml"
+
+    #model_idx="7_state"
+    saved_models_filepath = "/home/azureuser/meta/ml_code/models/"
+    checkpoint = Path(saved_models_filepath) / f"{model_name}_{model_idx}"
+
+    if checkpoint.exists():
+        #Load the model
+        print("Loading model")
+        state = model.load_model(
+            model_save_dir=saved_models_filepath,
+            model_name=model_name,
+            model_idx=model_idx,
+        )
+        del state
+    else:
+        import sys
+        print("State not found")
+        sys.exit(1)
 
 
 trainer = WeightedTrainer(
@@ -234,7 +306,8 @@ trainer = WeightedTrainer(
     args=training_args,                  # training arguments, defined above
     train_dataset=train_encodings,         # training dataset
     eval_dataset=val_encodings,             # evaluation dataset
-    compute_metrics=compute_metrics
+    compute_metrics=compute_metrics,
+#    callbacks=[early_stopping]
 )
 
 trainer.train()
@@ -252,13 +325,14 @@ from sklearn.metrics import classification_report
 report = classification_report(val_encoded_labels, val_preds, target_names=['NOT', 'OFF'])
 print(report)
 
-test_texts, test_labels = read_offensive_split(dataset_path / 'test.tsv')
+test_texts, test_labels = read_offensive_split(dataset_path / dataset_file_map['test'])
 
 test_text_processed = [preprocess_text(text) for text in test_texts]
 
 test_dataset = Dataset.from_dict({'text': test_text_processed, 'label': test_labels})
 
 test_encodings = test_dataset.map(tokenize_function, batched=True)
+test_encodings.set_format('torch', columns=model_columns)
 
 test_raw_pred,_,_ = trainer.predict(test_encodings)
 test_preds = np.argmax(test_raw_pred, axis=1)

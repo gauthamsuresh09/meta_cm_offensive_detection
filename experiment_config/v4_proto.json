@@ -1,0 +1,53 @@
+{
+  "batch_size":8,
+  "gpu_to_use":0,
+  "num_dataprovider_workers":4,
+
+  "dataset_name":"offensive_lang_detect",
+  "dataset_path":"/home/azureuser/meta/datasets/v1/",
+  "reset_stored_paths":false,
+  "experiment_name":"offensive_lang_detect_binary_proto",
+  "pretrained_weights":"xlm-roberta-base",
+  "teacher_dir": "teachers",
+  "meta_loss":"ce",
+
+  "num_freeze_epochs": 0,
+  "patience":3,
+
+  "train_seed": 42,
+  "val_seed": 0,
+  "evaluate_on_test_set_only": false,
+  "eval_using_full_task_set": false,
+  "num_evaluation_seeds": 5,
+  "meta_update_method":"protomaml",
+  "protomaml_do_centralize": true,
+
+  "total_epochs": 3,
+  "total_iter_per_epoch": 100,
+  "total_epochs_before_pause": 150,
+  "per_step_layer_norm_weights":false,
+  "evalute_on_test_set_only": false,
+  "num_evaluation_tasks":20,
+  "number_of_evaluation_steps_per_iter":5,
+
+  "learnable_per_layer_per_step_inner_loop_learning_rate": false,
+  "enable_inner_loop_optimizable_ln_params":false,
+  "init_inner_loop_learning_rate": 1e-5,
+  "init_class_head_lr_multiplier": 10,
+  "split_support_and_query": true,
+  "sets_are_pre_split": true,
+  "sample_task_to_size_ratio": false,
+  "shuffle_labels":true,
+
+  "min_learning_rate":0.000001,
+  "meta_learning_rate":3e-5,
+  "meta_inner_optimizer_learning_rate":6e-5,
+
+  "number_of_training_steps_per_iter": 5,
+  "num_classes_per_set": 2,
+  "num_samples_per_class": 2,
+  "num_target_samples": 2,
+
+  "second_order": false,
+  "first_order_to_second_order_epoch": 150
+}
