@@ -103,38 +103,41 @@ The following options are configurable:
 ```buildoutcfg
   "batch_size":4, # number of tasks for one update
   "gpu_to_use":0, # set to -1 to not use GPU if available
-  "num_dataprovider_workers":4, 
+  "num_dataprovider_workers":4, # Number of dataprovider workers, keep it at 4 if any error pops up for higher value
  
-  "dataset_name":"eng_text_class", # Name of dataset as per Data and Preprocessing section
-  "dataset_path":"eng_text_class",
+  "dataset_name":"offensive_lang_detect", # Name of dataset as per Data and Preprocessing section
+  "dataset_path":"/home/someuser/datasets/ta", # Absolute path to dataset directory
   "reset_stored_paths":false,
-  "experiment_name":"eng_text_class-threeway",
-  "pretrained_weights":"distilbert-base-multilingual-cased", #pretrained weights of base-learner from HuggingFace Transformers
+  "experiment_name":"offensive_lang_detect_binary_maml_ta", # Name for the experiment
+  "pretrained_weights":"xlm-roberta-base", # Pretrained weights of base-learner from HuggingFace Transformers
   "teacher_dir": "teachers",
   "meta_loss":"ce", # Loss to update base-learner with, KL divergence with continuous labels is also availabe (kl)
   
-  "num_freeze_epochs": 0, # number of epochs to only train inner-loop optimizer
+  "num_freeze_epochs": 0, # Number of epochs to only train inner-loop optimizer
   "patience":3, # Number of epochs of no improvement before applying early stopping
 
-  "train_seed": 42, 
+  "train_seed": 42, # Seed for the trainer
   "val_seed": 0,
   "evaluate_on_test_set_only": false,
-  "eval_using_full_task_set": true,
+  "eval_using_full_task_set": false,
   "num_evaluation_seeds": 5,
-  "meta_update_method":"protomaml", # Options: maml, reptile, protomaml, protonet
+  "meta_update_method":"maml", # Options: maml, reptile, protomaml, protonet
   "protomaml_do_centralize": true, # whether to use ProtoMAMln instead of regular ProtoMAML
   
   "total_epochs": 50,
   "total_iter_per_epoch":100, # number of update steps per epoch
-  "total_epochs_before_pause": 100,
+  "total_epochs_before_pause": 150,
   "per_step_layer_norm_weights":true,  # separate layer norm weights per inner-loop step
   "evalute_on_test_set_only": false,
-  "num_evaluation_tasks":50,
+  "num_evaluation_tasks":25,
+  "number_of_evaluation_steps_per_iter":5,
   
   "learnable_per_layer_per_step_inner_loop_learning_rate": true, # whether to train or freeze inner lr
+  "enable_inner_loop_optimizable_ln_params":false,
   "init_inner_loop_learning_rate": 1e-5,
   "init_class_head_lr_multiplier": 10, # factor with which to increase the initial lr of the classification head of the model
   "split_support_and_query": true,
+  "sets_are_pre_split": true,
   "sample_task_to_size_ratio": false,
   "shuffle_labels":true,
 
@@ -143,12 +146,13 @@ The following options are configurable:
   "meta_inner_optimizer_learning_rate":6e-5, # learning rate applied to the inner-loop optimizer
   
   "number_of_training_steps_per_iter":5,
-  "num_classes_per_set":4,
-  "num_samples_per_class":2,
-  "num_target_samples": 2,
+  "num_classes_per_set":2,
+  "num_samples_per_class":8,
+  "num_target_samples": 8,
 
   "second_order": false
-  "first_order_to_second_order_epoch":50 # epoch at which to start using second order gradients
+  "first_order_to_second_order_epoch":150 # epoch at which to start using second order gradients
+  "gold_label_tasks": ["sentiment_ta-en", "sentiment_ta-en-test", "sentiment-fire21_ta-en", "sentiment-fire21_ta-en-test"]
 ```
 
 ### Fine-tuning for offensive language detection
