@@ -27,8 +27,8 @@ Install PyTorch (>1.5). Please refer to the [PyTorch installation page](https://
 
 [4] Clone the repository:
 ```
-git clone https://github.com/mrvoh/meta_learning_multilingual_doc_classification.git
-cd meta_learning_multilingual_doc_classification
+git clone https://github.com/gauthamsuresh09/meta_cm_offensive_detection.git
+cd meta_cm_offensive_detection
 ```
 [5] Install the Ranger optimizer
 Instructions found in [the original repo on Github](https://github.com/lessw2020/Ranger-Deep-Learning-Optimizer)  
