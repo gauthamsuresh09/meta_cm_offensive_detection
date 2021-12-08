@@ -1,5 +1,7 @@
-# Multilingual and cross-lingual document classification: A meta-learning approach
-This repository is based on the work of Antreas Antoniou, [How To Train Your MAML](https://github.com/AntreasAntoniou/HowToTrainYourMAMLPytorch).
+# Meta-learning for Offensive Language Detection in Code-Mixed Texts
+
+The base code of this repository is from [Multilingual and cross-lingual document classification: A meta-learning approach](https://github.com/mrvoh/meta_learning_multilingual_doc_classification)
+
 ## Contents
 | Section | Description |
 |-|-|
@@ -29,7 +31,8 @@ git clone https://github.com/mrvoh/meta_learning_multilingual_doc_classification
 cd meta_learning_multilingual_doc_classification
 ```
 [5] Install the Ranger optimizer
-Instructions found in [the original repo on Github](https://github.com/lessw2020/Ranger-Deep-Learning-Optimizer)
+Instructions found in [the original repo on Github](https://github.com/lessw2020/Ranger-Deep-Learning-Optimizer)  
+
 [6] Install the requirements:
 ```
 pip install -r requirements.txt
