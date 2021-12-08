@@ -89,7 +89,11 @@ So for instance in order to use the base multilingual version of bert as base-le
 
 
 ## Running an experiment
-In order to run an experiment, setup the hyperparameters as desired and run
+An experiment involves training the XLM-R model using meta-learning and then finetuning it on the offensive language detection dataset.
+
+### Meta-learning
+
+Set the path to meta-learning datasets and execute the experiment using a config file.
 ```
 export DATASET_DIR="path/to/dataset/"
 python train_maml_system.py --name_of_args_json_file path/to/config.json
@@ -146,6 +150,21 @@ The following options are configurable:
   "second_order": false
   "first_order_to_second_order_epoch":50 # epoch at which to start using second order gradients
 ```
+
+### Fine-tuning for offensive language detection
+
+To finetune the model for offensive language detection tasks, execute the finetuning scripts with required arguments. There are two available scripts, one for low-resource (few shot) learning and another for high-resource training.
+
+The arguments for the scripts :
+- `dataset_name`: Name of dataset/task. Available options are `hasoc-2020/task1-ml`, `hasoc-2020/task2-ta` and `hasoc-2020/task2-ml`
+- `seed_val`: The seed value for random generators, ensures reproducible results
+- `model_name` and `model_idx`: These together form the path to the model that needs to be finetuned. A special value of "base" for model_name loads the XLM-R Base model from Hugging Face, which forms the baseline scores. Otherwise, the file path is set as follows: `<current_directory>/models/<model_name>_<model_idx>` . For example, `model_name` 'maml' and `model_idx` '1_ml' loads the model from `<current_directory>/models/maml_1_ml`
+
+#### Low-resource finetuning
+The script can be executed as follows : `python new_finetune_offensive_fewshot.py dataset_name seed_val model_name model_idx`
+
+#### High-resource finetuning
+The script can be executed as follows : `python new_finetune_offensive_full.py dataset_name seed_val model_name model_idx`
 
 
 ## Citation
