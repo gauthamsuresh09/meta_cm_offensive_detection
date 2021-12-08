@@ -79,15 +79,6 @@ So for instance, the first sample from the MLDoc dataset, corresponding to class
 - ProtoMAML
 - ProtoMAMLn
 
-## Supported base-learners
-All base-learners are based on the HuggingFace Transformers library, but in order to support learnable learning rates, the forward() method of the base-learner has to be implemented in a functional way (see ```meta_bert.py```). Hence, base-learner support is limited to:
-- BERT
-- XLM-Roberta
-- DistilBert
-
-So for instance in order to use the base multilingual version of bert as base-learner, the ```pretrained_weights``` option has to be set to ```bert-base-multilingual-cased ```.
-
-
 ## Running an experiment
 An experiment involves training the XLM-R model using meta-learning and then finetuning it on the offensive language detection dataset.
 
