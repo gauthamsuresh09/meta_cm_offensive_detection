@@ -7,8 +7,8 @@ import torch
 import numpy as np
 import math
 from transformers.modeling_utils import prune_linear_layer
-from transformers.modeling_roberta import create_position_ids_from_input_ids
-from transformers.modeling_bert import ACT2FN
+from transformers.models.roberta.modeling_roberta import create_position_ids_from_input_ids
+from transformers.models.bert.modeling_bert import ACT2FN
 
 META_ADAPTER_NAME = "adapter"
 

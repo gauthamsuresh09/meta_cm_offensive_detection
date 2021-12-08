@@ -5,9 +5,9 @@ import math
 import torch
 import os
 from transformers import WEIGHTS_NAME, AutoModel
-from transformers.modeling_roberta import create_position_ids_from_input_ids
+from transformers.models.roberta.modeling_roberta import create_position_ids_from_input_ids
 from copy import deepcopy
-from meta_neural_network_architectures import *
+from new_meta_neural_network_architectures import *
 
 
 def per_step_layer_norm(model, num_steps):
@@ -361,8 +361,12 @@ class MetaBERTForHF(MetaBERT):
         :return: A dictionary containing the experiment state and the saved model parameters.
         """
         filepath = os.path.join(model_save_dir, "{}_{}".format(model_name, model_idx))
+        print(f"Loading state from {filepath}")
         state = torch.load(filepath, map_location=torch.device("cpu"))
-        state_dict_loaded = state["network"]
+        if "network" in state:
+            state_dict_loaded = state["network"]
+        else:
+            state_dict_loaded = state
 
         param_dict = dict()
         for name, param in state_dict_loaded.items():
@@ -370,8 +374,12 @@ class MetaBERTForHF(MetaBERT):
                 continue
             if name.startswith('classifier.'):
                 name = name[11:]
+                #if name.startswith('classifier.'):
+                #    print(f"Skipping {name}")
+                #    continue
             param_dict[name] = param
 
+        print(param_dict.keys())
         self.load_state_dict(state_dict=param_dict, strict=False)
         return param_dict
 

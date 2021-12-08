@@ -8,6 +8,7 @@ import time
 from transformers import AutoModelForSequenceClassification
 from torch.utils.tensorboard import SummaryWriter
 import cProfile, pstats, io
+import torch
 
 
 class ExperimentBuilder(object):
@@ -591,6 +592,9 @@ class ExperimentBuilder(object):
 
         # pr = cProfile.Profile()
         # pr.enable()
+
+        from maml import print_torch_stats
+
         with tqdm.tqdm(
             initial=self.state["current_iter"],
             total=int(self.args.total_iter_per_epoch * self.args.total_epochs),
@@ -609,6 +613,9 @@ class ExperimentBuilder(object):
                         - self.state["current_iter"]
                     )
                 ):
+                    torch.cuda.empty_cache()
+                    print_torch_stats()
+
                     (
                         train_losses,
                         total_losses,
@@ -623,6 +630,8 @@ class ExperimentBuilder(object):
                         current_iter=self.state["current_iter"],
                         sample_idx=self.state["current_iter"],
                     )
+
+                    print_torch_stats()
 
                     if self.state["current_iter"] % self.args.total_iter_per_epoch == 0:
                         # pr.disable()
@@ -639,6 +648,7 @@ class ExperimentBuilder(object):
                         ):  # evaluate on the whole available task set
                             val_losses = self.full_task_set_evaluation(epoch=epoch)
                         else:  # evaluate in few-shot fashion/ on query set only
+                            print("Evaluating on query set ", int(self.args.num_evaluation_tasks/self.args.batch_size))
                             with tqdm.tqdm(
                                 total=int(
                                     self.args.num_evaluation_tasks
@@ -663,6 +673,7 @@ class ExperimentBuilder(object):
                                         phase="val",
                                     )
                         # Write metrics to tensorboard
+                        print(val_losses)
 
                         # log metrics
                         self.writer.add_scalars(
@@ -753,11 +764,11 @@ class ExperimentBuilder(object):
                             >= self.total_epochs_before_pause
                         ):
                             print("Pause time, evaluating on test set...")
-                            print(
-                                self.full_task_set_evaluation(
-                                    set_name="test", epoch=self.epoch
-                                )
-                            )
+                            #print(
+                            #    self.full_task_set_evaluation(
+                            #        set_name="test", epoch=self.epoch
+                            #    )
+                            #)
                             print(
                                 "train_seed {}, val_seed: {}, at pause time".format(
                                     self.data.dataset.seed["train"],
@@ -772,11 +783,11 @@ class ExperimentBuilder(object):
                                     self.num_epoch_no_improvements
                                 )
                             )
-                            print(
-                                self.full_task_set_evaluation(
-                                    set_name="test", epoch=self.epoch
-                                )
-                            )
+                            #print(
+                            #    self.full_task_set_evaluation(
+                            #        set_name="test", epoch=self.epoch
+                            #    )
+                            #)
                             print(
                                 "train_seed {}, val_seed: {}, at pause time".format(
                                     self.data.dataset.seed["train"],
@@ -786,5 +797,83 @@ class ExperimentBuilder(object):
 
                             sys.exit()
 
-            print(self.full_task_set_evaluation(epoch=self.epoch, set_name="test"))
+            #print(self.full_task_set_evaluation(epoch=self.epoch, set_name="test"))
             # self.evaluate_test_set_using_the_best_models(top_n_models=5)
+
+    def finetune_task(self):
+
+        from pathlib import Path
+        checkpoint = Path(self.saved_models_filepath) / "train_model_best"
+
+        if checkpoint.exists():
+            #Load the model
+            print("Loading model")
+            self.state = self.model.load_model(
+                model_save_dir=self.saved_models_filepath,
+                model_name="train_model",
+                model_idx="best",
+            )
+            del self.state
+        else:
+            print("Checkpoint doesnt exist, continuing with fine-tuning base model")
+
+        torch.cuda.empty_cache()
+
+        # Handle KL/CE loss
+        set_meta_loss_back = False
+        if self.model.meta_loss.lower() == "kl" and self.args.val_using_cross_entropy:
+            # Use cross entropy on gold labels as no teacher encoding is available
+            self.model.meta_loss = "ce"
+            set_meta_loss_back = True
+
+        # Load the dataset
+        task_suffix = self.args.finetune_task_suffix
+        train_dataloader, dev_dataloader, test_dataloader = self.data.get_task_set_splits(task_suffix)
+
+        # Fine-tune the model
+
+        curr_loss, accuracy = self.model.single_task_finetune_hf(
+            train_dataloader,
+            dev_dataloader,
+            task_name=task_suffix,
+            num_epochs=self.args.finetune_num_epochs
+        )
+
+        # Evaluate on test set
+        print("Evaluating model on test set")
+        losses = []
+        is_correct_preds = []
+
+        names_weights_copy = self.model.classifier.get_inner_loop_params()
+
+        print(f"Test samples : {test_dataloader}")
+        with torch.no_grad():
+            for batch in tqdm(
+                test_dataloader,
+                desc="Evaluating",
+                leave=False,
+                total=len(test_dataloader),
+            ):
+                batch = tuple(t.to(self.device) for t in batch)
+                x, mask, y_true = batch
+
+                loss, is_correct = self.net_forward(
+                    x,
+                    mask=mask,
+                    teacher_unary=y_true,
+                    fast_model=names_weights_copy,
+                    training=False,
+                    return_nr_correct=True,
+                    num_step=train_step,
+                )
+                losses.append(loss.item())
+                is_correct_preds.extend(is_correct.tolist())
+
+        avg_loss = np.mean(losses)
+        accuracy = np.mean(is_correct_preds)
+
+        print(f"Average loss : {avg_loss}, Average accuracy : {accuracy}")
+
+
+        if set_meta_loss_back:
+            self.model.meta_loss = "kl"

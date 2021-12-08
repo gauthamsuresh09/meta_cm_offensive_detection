@@ -8,13 +8,17 @@ import torch.optim as optim
 from copy import deepcopy
 import gc
 from transformers import AutoModel, AutoModelForSequenceClassification, AutoConfig
-from transformers import AdapterConfig, AdapterType
+#from transformers import AdapterConfig, AdapterType
 
 from few_shot_learning_system import *
 from meta_bert import MetaBERT, distil_state_dict_to_bert
 from inner_loop_optimizers import LSLRGradientDescentLearningRule
 from ranger import Ranger
 
+def print_torch_stats():
+    reserved = torch.cuda.memory_reserved()
+    allocated = torch.cuda.memory_allocated()
+    print(f"Allocated : {allocated}, Reserved : {reserved}")
 
 class MAMLFewShotClassifier(FewShotClassifier):
     def __init__(self, device, args):
@@ -25,11 +29,17 @@ class MAMLFewShotClassifier(FewShotClassifier):
         """
         super(MAMLFewShotClassifier, self).__init__(device, args)
 
+        print("Init")
+        print_torch_stats()
+
         config = AutoConfig.from_pretrained(args.pretrained_weights)
         config.num_labels = args.num_classes_per_set
         model_initialization = AutoModelForSequenceClassification.from_pretrained(
             args.pretrained_weights, config=config
         )
+
+        print("Base model created")
+        print_torch_stats()
 
         slow_model = MetaBERT
 
@@ -38,6 +48,9 @@ class MAMLFewShotClassifier(FewShotClassifier):
         config = model_initialization.config
 
         del model_initialization
+
+        print("Base model deleted")
+        print_torch_stats()
 
         # Slow model
         self.classifier = slow_model.init_from_pretrained(
@@ -50,8 +63,15 @@ class MAMLFewShotClassifier(FewShotClassifier):
             num_inner_loop_steps=args.number_of_training_steps_per_iter,
             device=device,
         )
+
+        print("Classifier model created")
+        print_torch_stats()
+
         self.classifier.to("cpu")
         self.classifier.train()
+
+        print("Classifier moved to CPU")
+        print_torch_stats()
 
         self.inner_loop_optimizer = LSLRGradientDescentLearningRule(
             device=torch.device("cpu"),
@@ -93,6 +113,9 @@ class MAMLFewShotClassifier(FewShotClassifier):
         )
 
         self.inner_loop_optimizer.to(self.device)
+
+        print("Optimizer moved to GPU")
+        print_torch_stats()
 
         self.clip_value = 1.0
         # gradient clipping
@@ -198,6 +221,8 @@ class MAMLFewShotClassifier(FewShotClassifier):
         if task_name in self.gold_label_tasks and self.meta_loss.lower() == "kl":
             set_kl_loss = True
             self.meta_loss = "ce"
+
+        #print(teacher_unary, student_logits.shape)
 
         loss = self.inner_loss(
             student_logits, teacher_unary, return_nr_correct=return_nr_correct
@@ -502,3 +527,222 @@ class MAMLFewShotClassifier(FewShotClassifier):
                             ),
                         )
                     return names_weights_copy, best_loss, avg_loss, accuracy
+
+    def single_task_finetune(
+        self,
+        train_dataloader,
+        dev_dataloader,
+        task_name,
+        num_epochs,
+        train_on_cpu=False
+    ):
+        """
+        Finetunes the meta-learned classifier on a dataset
+        """
+        if train_on_cpu:
+            self.device = torch.device("cpu")
+
+        self.inner_loop_optimizer.requires_grad_(False)
+        self.inner_loop_optimizer.eval()
+
+        self.inner_loop_optimizer.to(self.device)
+        self.classifier.to(self.device)
+
+
+        self.classifier.unfreeze()
+        names_weights_copy = self.classifier.get_inner_loop_params()
+
+
+        print(f"Dataloader sizes : Train - {len(train_dataloader)}, Val - {len(dev_dataloader)}")
+
+        train_step = 1
+
+        losses = []
+
+        with tqdm(
+            initial=0, total=num_epochs * len(train_dataloader)
+        ) as pbar_train:
+
+            for epoch in range(num_epochs):
+                for batch_idx, batch in enumerate(train_dataloader):
+                    torch.cuda.empty_cache()
+                    batch = tuple(t.to(self.device) for t in batch)
+                    x, mask, y_true = batch
+
+                    support_loss = self.net_forward(
+                        x,
+                        mask=mask,
+                        teacher_unary=y_true,
+                        num_step=train_step,
+                        fast_model=names_weights_copy,
+                        training=True,
+                    )
+
+                    names_weights_copy = self.apply_inner_loop_update(
+                        loss=support_loss,
+                        names_weights_copy=names_weights_copy,
+                        use_second_order=False,
+                        current_step_idx=train_step,
+                    )
+
+                    self.inner_loop_optimizer.zero_grad()
+
+                    pbar_train.update(1)
+                    losses.append(support_loss.item())
+                    pbar_train.set_description(
+                        "finetuning phase {} -> loss: {}".format(
+                            len(train_dataloader) * epoch
+                            + batch_idx
+                            + 1,
+                            np.mean(losses),
+                        )
+                    )
+
+
+
+                print("Evaluating model...")
+                losses = []
+                is_correct_preds = []
+
+                if train_on_cpu:
+                    self.device = torch.device("cuda")
+                    self.classifier.to(self.device)
+
+                with torch.no_grad():
+                    for batch in tqdm(
+                        dev_dataloader,
+                        desc="Evaluating",
+                        leave=False,
+                        total=len(dev_dataloader),
+                    ):
+                        batch = tuple(t.to(self.device) for t in batch)
+                        x, mask, y_true = batch
+
+                        loss, is_correct = self.net_forward(
+                            x,
+                            mask=mask,
+                            teacher_unary=y_true,
+                            fast_model=names_weights_copy,
+                            training=False,
+                            return_nr_correct=True,
+                            num_step=train_step,
+                        )
+                        losses.append(loss.item())
+                        is_correct_preds.extend(is_correct.tolist())
+
+                avg_loss = np.mean(losses)
+                accuracy = np.mean(is_correct_preds)
+                print("Val loss : ", avg_loss, "Val accuracy : ", accuracy)
+
+            return avg_loss, accuracy
+
+
+    def single_task_finetune_hf(
+        self,
+        train_dataloader,
+        dev_dataloader,
+        task_name,
+        num_epochs,
+        train_on_cpu=False
+    ):
+        """
+        Finetunes the meta-learned classifier on a dataset
+        """
+        if train_on_cpu:
+            self.device = torch.device("cpu")
+
+
+        print("Training using HF methods")
+
+
+        from torch.utils.data import DataLoader
+        from transformers import AdamW
+
+
+        self.classifier.to(self.device)
+        self.classifier.unfreeze()
+        self.classifier.train()
+
+
+        optim = AdamW(self.classifier.parameters(), lr=2e-5)
+
+
+        print(f"Dataloader sizes : Train - {len(train_dataloader)}, Val - {len(dev_dataloader)}")
+
+        train_step = 1
+
+        with tqdm(
+            initial=0, total=num_epochs * len(train_dataloader)
+        ) as pbar_train:
+
+            for epoch in range(num_epochs):
+                self.classifier.train()
+                for batch_idx, batch in enumerate(train_dataloader):
+                    #torch.cuda.empty_cache()
+
+                    optim.zero_grad()
+
+                    batch = tuple(t.to(self.device) for t in batch)
+                    x, mask, y_true = batch
+
+
+
+                    support_loss = self.net_forward(
+                        x,
+                        mask=mask,
+                        teacher_unary=y_true,
+                        num_step=train_step,
+                        fast_model=None,
+                        training=True,
+                    )
+
+                    support_loss.backward()
+                    optim.step()
+
+                    pbar_train.update(1)
+                    pbar_train.set_description(
+                        "finetuning phase {} -> loss: {}".format(
+                            len(train_dataloader) * epoch
+                            + batch_idx
+                            + 1,
+                            support_loss,
+                        )
+                    )
+
+
+                self.classifier.eval()
+                print("Evaluating model...")
+                losses = []
+                is_correct_preds = []
+
+                if train_on_cpu:
+                    self.device = torch.device("cuda")
+                    self.classifier.to(self.device)
+
+                with torch.no_grad():
+                    for batch in tqdm(
+                        dev_dataloader,
+                        desc="Evaluating",
+                        leave=False,
+                        total=len(dev_dataloader),
+                    ):
+                        batch = tuple(t.to(self.device) for t in batch)
+                        x, mask, y_true = batch
+
+                        loss, is_correct = self.net_forward(
+                            x,
+                            mask=mask,
+                            teacher_unary=y_true,
+                            fast_model=None,
+                            training=False,
+                            return_nr_correct=True,
+                            num_step=train_step,
+                        )
+                        losses.append(loss.item())
+                        is_correct_preds.extend(is_correct.tolist())
+
+                avg_loss = np.mean(losses)
+                accuracy = np.mean(is_correct_preds)
+                print("Val loss : ", avg_loss, "Val accuracy : ", accuracy)
+
+            return avg_loss, accuracy
