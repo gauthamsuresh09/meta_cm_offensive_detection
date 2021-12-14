@@ -164,7 +164,9 @@ The script can be executed as follows : `python new_finetune_offensive_full.py d
 
 ## Citation
 
-Please cite our [paper](https://arxiv.org/abs/2101.11302) if you use it in your own work.
+Our paper will be published soon. Please check back again for citation updates.
+
+Please cite the following paper as well if you are using the code from this repository.
 ```bibtex
 @inproceedings{van2021multilingual,
   title={Multilingual and cross-lingual document classification: A meta-learning approach},
